@@ -1,6 +1,7 @@
 
 package vn.server.taixiu;
 
+import net.milkbowl.vault.economy.Economy;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.boss.BarColor;
@@ -12,33 +13,44 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.plugin.RegisteredServiceProvider;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitRunnable;
 
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Random;
 import java.util.UUID;
 
 public final class TaiXiuPoints extends JavaPlugin implements Listener {
 
-    private final Map<UUID, Integer> points = new HashMap<>();
     private final Map<UUID, Bet> bets = new HashMap<>();
     private final Random random = new Random();
 
+    private Economy economy;
     private BossBar bossBar;
     private int secondsLeft;
     private boolean bettingOpen = true;
 
-    private record Bet(String choice, int amount) {}
+    private record Bet(String choice, double amount) {}
 
     @Override
     public void onEnable() {
         saveDefaultConfig();
-        secondsLeft = getConfig().getInt("round-seconds", 30);
+
+        if (!setupEconomy()) {
+            getLogger().severe(
+                    "Khong tim thay Vault Economy! Hay kiem tra Vault va EssentialsX Economy."
+            );
+            getServer().getPluginManager().disablePlugin(this);
+            return;
+        }
+
+        secondsLeft = Math.max(1, getConfig().getInt("round-seconds", 120));
 
         bossBar = Bukkit.createBossBar(
-                "Tài Xỉu - Còn " + secondsLeft + " giây",
+                "Tai Xiu - Con " + secondsLeft + " giay",
                 BarColor.BLUE,
                 BarStyle.SOLID
         );
@@ -48,14 +60,26 @@ public final class TaiXiuPoints extends JavaPlugin implements Listener {
 
         for (Player player : Bukkit.getOnlinePlayers()) {
             bossBar.addPlayer(player);
-            points.putIfAbsent(
-                    player.getUniqueId(),
-                    getConfig().getInt("starting-points", 1000)
-            );
         }
 
         startRounds();
-        getLogger().info("TaiXiuPoints da bat!");
+        getLogger().info("TaiXiuPoints da bat voi Vault Economy.");
+    }
+
+    private boolean setupEconomy() {
+        if (Bukkit.getPluginManager().getPlugin("Vault") == null) {
+            return false;
+        }
+
+        RegisteredServiceProvider<Economy> registration =
+                Bukkit.getServicesManager().getRegistration(Economy.class);
+
+        if (registration == null) {
+            return false;
+        }
+
+        economy = registration.getProvider();
+        return economy != null;
     }
 
     @Override
@@ -67,14 +91,11 @@ public final class TaiXiuPoints extends JavaPlugin implements Listener {
 
     @EventHandler
     public void onJoin(PlayerJoinEvent event) {
-        Player player = event.getPlayer();
-        bossBar.addPlayer(player);
-        points.putIfAbsent(
-                player.getUniqueId(),
-                getConfig().getInt("starting-points", 1000)
+        bossBar.addPlayer(event.getPlayer());
+        event.getPlayer().sendMessage(
+                ChatColor.GREEN + "So du hien tai: "
+                        + economy.format(economy.getBalance(event.getPlayer()))
         );
-        player.sendMessage(ChatColor.GREEN
-                + "Ban co " + points.get(player.getUniqueId()) + " diem.");
     }
 
     @Override
@@ -93,71 +114,75 @@ public final class TaiXiuPoints extends JavaPlugin implements Listener {
             return true;
         }
 
-        UUID id = player.getUniqueId();
-        points.putIfAbsent(
-                id,
-                getConfig().getInt("starting-points", 1000)
-        );
-
         if (args.length == 1 && args[0].equalsIgnoreCase("info")) {
-            player.sendMessage(ChatColor.GOLD + "Diem cua ban: "
-                    + points.get(id));
+            player.sendMessage(ChatColor.GOLD + "So du: "
+                    + economy.format(economy.getBalance(player)));
+            player.sendMessage(ChatColor.YELLOW
+                    + "Trang thai dat cuoc: "
+                    + (bettingOpen ? "Dang mo" : "Da dong"));
             return true;
         }
 
         if (args.length != 2) {
             player.sendMessage(ChatColor.YELLOW
-                    + "Dung: /taixiu <tai|xiu|info> [so-diem]");
+                    + "Dung: /taixiu <tai|xiu|info> [so-tien]");
             return true;
         }
 
         if (!bettingOpen) {
-            player.sendMessage(ChatColor.RED
-                    + "Vong nay da dong dat diem.");
+            player.sendMessage(ChatColor.RED + "Vong nay da dong dat cuoc.");
             return true;
         }
 
-        String choice = args[0].toLowerCase();
+        String choice = args[0].toLowerCase(Locale.ROOT);
         if (!choice.equals("tai") && !choice.equals("xiu")) {
-            player.sendMessage(ChatColor.RED
-                    + "Hay chon tai hoac xiu.");
+            player.sendMessage(ChatColor.RED + "Hay chon tai hoac xiu.");
             return true;
         }
 
-        int amount;
+        double amount;
         try {
-            amount = Integer.parseInt(args[1]);
+            amount = Double.parseDouble(args[1]);
         } catch (NumberFormatException ex) {
-            player.sendMessage(ChatColor.RED
-                    + "So diem khong hop le.");
+            player.sendMessage(ChatColor.RED + "So tien khong hop le.");
             return true;
         }
 
-        int min = getConfig().getInt("min-bet", 10);
-        int max = getConfig().getInt("max-bet", 500);
+        double min = getConfig().getDouble("min-bet", 10);
+        double max = getConfig().getDouble("max-bet", 500);
 
-        if (amount < min || amount > max) {
+        if (!Double.isFinite(amount) || amount < min || amount > max) {
             player.sendMessage(ChatColor.RED
-                    + "Moi luot can tu " + min + " den " + max + " diem.");
+                    + "Moi luot can tu " + economy.format(min)
+                    + " den " + economy.format(max) + ".");
             return true;
         }
+
+        UUID id = player.getUniqueId();
 
         if (bets.containsKey(id)) {
             player.sendMessage(ChatColor.RED
-                    + "Ban da dat diem trong vong nay.");
+                    + "Ban da dat cuoc trong vong nay.");
             return true;
         }
 
-        if (points.get(id) < amount) {
-            player.sendMessage(ChatColor.RED + "Ban khong du diem.");
+        if (economy.getBalance(player) < amount) {
+            player.sendMessage(ChatColor.RED + "Ban khong du tien.");
             return true;
         }
 
-        points.put(id, points.get(id) - amount);
+        var withdrawal = economy.withdrawPlayer(player, amount);
+        if (!withdrawal.transactionSuccess()) {
+            player.sendMessage(ChatColor.RED
+                    + "Khong the tru tien: " + withdrawal.errorMessage);
+            return true;
+        }
+
         bets.put(id, new Bet(choice, amount));
 
-        player.sendMessage(ChatColor.GREEN + "Da dat " + amount
-                + " diem vao " + choice.toUpperCase() + ".");
+        player.sendMessage(ChatColor.GREEN + "Da dat "
+                + economy.format(amount) + " vao " + choice.toUpperCase(Locale.ROOT)
+                + ". Neu thang, ban nhan tong tien gap doi.");
         return true;
     }
 
@@ -166,13 +191,13 @@ public final class TaiXiuPoints extends JavaPlugin implements Listener {
             @Override
             public void run() {
                 if (secondsLeft > 0) {
-                    bossBar.setTitle("Tài Xỉu - Còn " + secondsLeft + " giây");
+                    bossBar.setTitle("Tai Xiu - Con " + secondsLeft + " giay");
                     bossBar.setProgress(Math.max(
                             0.0,
                             Math.min(1.0, secondsLeft
                                     / (double) Math.max(
                                     1,
-                                    getConfig().getInt("round-seconds", 30)
+                                    getConfig().getInt("round-seconds", 120)
                             ))
                     ));
                     secondsLeft--;
@@ -180,41 +205,53 @@ public final class TaiXiuPoints extends JavaPlugin implements Listener {
                 }
 
                 bettingOpen = false;
+
                 int dice1 = random.nextInt(6) + 1;
                 int dice2 = random.nextInt(6) + 1;
                 int dice3 = random.nextInt(6) + 1;
                 int total = dice1 + dice2 + dice3;
+
+                // Tong 4-10 = Xiu; tong 11-17 = Tai.
                 String result = total >= 11 ? "tai" : "xiu";
 
-                Bukkit.broadcastMessage(ChatColor.GOLD
-                        + "=== TAI XIU ===");
+                Bukkit.broadcastMessage(ChatColor.GOLD + "=== TAI XIU ===");
                 Bukkit.broadcastMessage(ChatColor.YELLOW
                         + "Xuc xac: " + dice1 + ", " + dice2 + ", " + dice3
                         + " | Tong: " + total);
                 Bukkit.broadcastMessage(ChatColor.AQUA
-                        + "Ket qua: " + result.toUpperCase());
+                        + "Ket qua: " + result.toUpperCase(Locale.ROOT));
 
                 for (Map.Entry<UUID, Bet> entry : bets.entrySet()) {
                     Player player = Bukkit.getPlayer(entry.getKey());
                     Bet bet = entry.getValue();
 
                     if (bet.choice().equals(result)) {
-                        int reward = bet.amount() * 2;
-                        points.merge(entry.getKey(), reward, Integer::sum);
+                        double reward = bet.amount() * 2.0;
+                        var deposit = economy.depositPlayer(entry.getKey(), reward);
 
                         if (player != null) {
-                            player.sendMessage(ChatColor.GREEN
-                                    + "Ban thang! Nhan lai " + reward
-                                    + " diem.");
+                            if (deposit.transactionSuccess()) {
+                                player.sendMessage(ChatColor.GREEN
+                                        + "Ban thang! Nhan tong "
+                                        + economy.format(reward) + ".");
+                            } else {
+                                player.sendMessage(ChatColor.RED
+                                        + "Khong the tra thuong. Hay bao admin kiem tra log.");
+                            }
+                        }
+
+                        if (!deposit.transactionSuccess()) {
+                            getLogger().severe("Khong the tra thuong cho UUID "
+                                    + entry.getKey() + ": " + deposit.errorMessage);
                         }
                     } else if (player != null) {
                         player.sendMessage(ChatColor.RED
-                                + "Ban thua " + bet.amount() + " diem.");
+                                + "Ban thua " + economy.format(bet.amount()) + ".");
                     }
                 }
 
                 bets.clear();
-                secondsLeft = getConfig().getInt("round-seconds", 30);
+                secondsLeft = Math.max(1, getConfig().getInt("round-seconds", 120));
                 bettingOpen = true;
                 bossBar.setColor(BarColor.BLUE);
                 bossBar.setTitle("Vong moi bat dau!");
