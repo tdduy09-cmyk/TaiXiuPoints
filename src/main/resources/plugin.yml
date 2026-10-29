@@ -1,13 +1,22 @@
+
 name: TaiXiuPoints
 version: 1.0.0
 main: vn.server.taixiu.TaiXiuPoints
 api-version: '26.2'
-description: Tai Xiu mini-game
+description: Tai Xiu mini-game using Vault economy
+
+depend:
+  - Vault
+
+softdepend:
+  - Essentials
+
 commands:
   taixiu:
     description: Play Tai Xiu
-    usage: /taixiu <tai|xiu|info>
+    usage: /taixiu <tai|xiu|info> [amount]
     permission: taixiu.play
+
 permissions:
   taixiu.play:
     default: true
