@@ -1,0 +1,15 @@
+name: TaiXiuPoints
+version: 1.0.0
+main: vn.server.taixiu.TaiXiuPoints
+api-version: '26.2'
+description: Tai Xiu mini-game
+commands:
+  taixiu:
+    description: Play Tai Xiu
+    usage: /taixiu <tai|xiu|info>
+    permission: taixiu.play
+permissions:
+  taixiu.play:
+    default: true
+  taixiu.admin:
+    default: op
